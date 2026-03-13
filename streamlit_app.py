@@ -32,10 +32,13 @@ DEPLOYMENT_PATH = Path("artifacts/deployment.json")
 
 def _env(key: str, default: str = "") -> str:
     """Read config from Streamlit Cloud secrets first, then fall back to .env."""
-    try:
-        return st.secrets[key]
-    except (KeyError, FileNotFoundError):
-        return os.getenv(key, default)
+    # Try exact match, then lowercase
+    for k in [key, key.lower(), key.upper()]:
+        try:
+            return str(st.secrets[k])
+        except (KeyError, FileNotFoundError):
+            continue
+    return os.getenv(key, default)
 
 # ─── Accepted AI / ML Model File Extensions ──────────────────────────────────
 MODEL_EXTENSIONS = [
@@ -433,8 +436,7 @@ def _read_deployment_address() -> Optional[str]:
     return json.loads(DEPLOYMENT_PATH.read_text()).get("contractAddress")
 
 
-@st.cache_resource
-def _load_contract(_w3: Web3):
+def _load_contract(w3: Web3):
     address = _env("CONTRACT_ADDRESS") or _read_deployment_address()
     if not address:
         return None
@@ -529,18 +531,28 @@ def main():
 
     if not is_online:
         rpc_attempted = _env("RPC_URL", "http://127.0.0.1:8545")
-        # Mask the key for security
         masked_rpc = rpc_attempted.split('?')[0] if '?' in rpc_attempted else rpc_attempted
         
-        st.error(
-            f"**Blockchain connection failed.**"
-        )
+        st.error("**Blockchain connection failed.**")
+        
+        with st.expander("🔍 Click to see technical error details"):
+            try:
+                # Try one last direct connection to capture the error
+                temp_w3 = _get_web3()
+                status = temp_w3.is_connected()
+                st.write(f"Direct connection test: {'Connected' if status else 'Failed'}")
+                st.write(f"Attempted RPC: `{masked_rpc}`")
+                if not status:
+                    # Trigger an error to catch it
+                    temp_w3.eth.block_number
+            except Exception as e:
+                st.code(f"Error: {str(e)}")
+        
         st.info(
-            f"**Attempted RPC:** `{masked_rpc}`\n\n"
             "**Common Fixes:**\n"
-            "1. If live: Ensure keys are in **Streamlit Cloud > Settings > Secrets**.\n"
-            "2. If local: Ensure **Ganache** is running.\n"
-            "3. Check if your Google Cloud RPC key has expired or is restricted."
+            "1. In **Streamlit Cloud Settings**, go to **Secrets**.\n"
+            "2. Ensure `RPC_URL` includes the **full key** (e.g., `.../rpc?key=AIza...`).\n"
+            "3. If using Google Cloud, ensure the API Key has **Blockchain Node Engine API** enabled."
         )
         _render_footer()
         st.stop()
