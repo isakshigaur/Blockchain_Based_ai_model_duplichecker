@@ -11,10 +11,7 @@ from web3 import Web3
 
 from backend.model_checker import (
     bytes16_from_hex,
-    check_local_duplicate,
     compute_md5_from_bytes,
-    format_record_for_display,
-    record_local_model,
 )
 from backend.ipfs_cid import generate_ipfs_cid
 
@@ -598,8 +595,6 @@ def main():
     )
 
     # ── Duplicate Checks ──────────────────────────────────────────────────────
-    local_dup = check_local_duplicate(md5_hash)
-
     try:
         hash_bytes = bytes16_from_hex(md5_hash)
         onchain_exists = _retry_call(
@@ -610,22 +605,14 @@ def main():
         _render_footer()
         return
 
-    local_cls = "status-err" if local_dup else "status-ok"
-    local_icon = "DUPLICATE" if local_dup else "CLEAR"
-    local_label = "Duplicate Found" if local_dup else "Local Index — Clear"
-
     chain_cls = "status-err" if onchain_exists else "status-ok"
     chain_icon = "REGISTERED" if onchain_exists else "CLEAR"
-    chain_label = "Already Registered" if onchain_exists else "Blockchain — Not Registered"
+    chain_label = "Already Registered" if onchain_exists else "Blockchain Verification — Clear"
 
     st.markdown(
         f"""
         <div class="status-row">
-            <div class="status-badge {local_cls}">
-                <div class="status-icon">{local_icon}</div>
-                <div class="status-text">{local_label}</div>
-            </div>
-            <div class="status-badge {chain_cls}">
+            <div class="status-badge {chain_cls}" style="flex: 1;">
                 <div class="status-icon">{chain_icon}</div>
                 <div class="status-text">{chain_label}</div>
             </div>
@@ -717,15 +704,6 @@ def main():
                 )
                 tx_hash = w3.eth.send_raw_transaction(raw_tx)
                 receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-
-                record_local_model(
-                    md5_hash,
-                    {
-                        "name": model_name,
-                        "ipfsCid": ipfs_cid,
-                        "txHash": tx_hash.hex(),
-                    },
-                )
 
                 st.success("Model registered successfully on the blockchain.")
 
