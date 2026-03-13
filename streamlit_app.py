@@ -1,7 +1,7 @@
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -15,15 +15,6 @@ from backend.model_checker import (
 )
 from backend.ipfs_cid import generate_ipfs_cid
 
-@st.cache_data
-def _compute_md5(payload: bytes) -> str:
-    return compute_md5_from_bytes(payload)
-
-
-@st.cache_data
-def _generate_cid(payload: bytes) -> str:
-    return generate_ipfs_cid(payload)
-
 load_dotenv()
 
 ARTIFACT_PATH = Path("artifacts/ModelRegistry.json")
@@ -32,13 +23,13 @@ DEPLOYMENT_PATH = Path("artifacts/deployment.json")
 
 def _env(key: str, default: str = "") -> str:
     """Read config from Streamlit Cloud secrets first, then fall back to .env."""
-    # Try exact match, then lowercase
     for k in [key, key.lower(), key.upper()]:
         try:
             return str(st.secrets[k])
         except (KeyError, FileNotFoundError):
             continue
     return os.getenv(key, default)
+
 
 # ─── Accepted AI / ML Model File Extensions ──────────────────────────────────
 MODEL_EXTENSIONS = [
@@ -415,15 +406,14 @@ PAGE_CSS = """
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_web3() -> Web3:
-    rpc = _env("RPC_URL", "http://127.0.0.1:8545")
-    # Google Cloud RPC sometimes requires specific headers or timeouts
-    headers = {'User-Agent': 'Mozilla/5.0 (StreamlitCloud)'}
-    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={'timeout': 20, 'headers': headers}))
-    return w3
-
-
 @st.cache_resource
+def _get_web3() -> Web3:
+    """Cached Web3 connection — only created once per app lifecycle."""
+    rpc = _env("RPC_URL", "http://127.0.0.1:8545")
+    return Web3(Web3.HTTPProvider(rpc, request_kwargs={"timeout": 30}))
+
+
+@st.cache_data
 def _load_artifact() -> Optional[dict]:
     if not ARTIFACT_PATH.exists():
         return None
@@ -436,7 +426,9 @@ def _read_deployment_address() -> Optional[str]:
     return json.loads(DEPLOYMENT_PATH.read_text()).get("contractAddress")
 
 
-def _load_contract(w3: Web3):
+@st.cache_resource
+def _load_contract(_w3: Web3):
+    """Cached contract instance — uses _w3 prefix for Streamlit hashing."""
     address = _env("CONTRACT_ADDRESS") or _read_deployment_address()
     if not address:
         return None
@@ -445,7 +437,7 @@ def _load_contract(w3: Web3):
         return None
     try:
         checksum = Web3.to_checksum_address(address.strip())
-        return w3.eth.contract(address=checksum, abi=artifact["abi"])
+        return _w3.eth.contract(address=checksum, abi=artifact["abi"])
     except Exception:
         return None
 
@@ -474,8 +466,18 @@ def _file_ext_label(name: str) -> str:
     return ext if ext else "FILE"
 
 
+@st.cache_data
+def _compute_md5(payload: bytes) -> str:
+    return compute_md5_from_bytes(payload)
+
+
+@st.cache_data
+def _generate_cid(payload: bytes) -> str:
+    return generate_ipfs_cid(payload)
+
+
 def _retry_call(fn, max_retries: int = 3, delay: float = 1.0):
-    """Retry a blockchain call to work around ganache-cli checkpoint bugs."""
+    """Retry a blockchain call to handle transient RPC errors."""
     last_err = None
     for attempt in range(max_retries):
         try:
@@ -498,9 +500,12 @@ def main():
     )
     st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
-    # ── Connect to blockchain silently ────────────────────────────────────────
+    # ── Connect to blockchain (cached — instant on reruns) ────────────────────
     w3 = _get_web3()
-    connected = w3.is_connected()
+    try:
+        connected = w3.is_connected()
+    except Exception:
+        connected = False
     contract = _load_contract(w3) if connected else None
     account = _get_account(w3) if connected else None
 
@@ -530,30 +535,10 @@ def main():
     )
 
     if not is_online:
-        rpc_attempted = _env("RPC_URL", "http://127.0.0.1:8545")
-        masked_rpc = rpc_attempted.split('?')[0] if '?' in rpc_attempted else rpc_attempted
-        
-        st.error("**Blockchain connection failed.**")
-        
-        with st.expander("🔍 Click to see technical error details"):
-            try:
-                # Try one last direct connection to capture the error
-                temp_w3 = _get_web3()
-                status = temp_w3.is_connected()
-                st.write(f"Direct connection test: {'Connected' if status else 'Failed'}")
-                st.write(f"Attempted RPC: `{masked_rpc}`")
-                if not status:
-                    # Trigger an error to catch it
-                    temp_w3.eth.block_number
-            except Exception as e:
-                st.code(f"Error: {str(e)}")
-        
-        st.info(
-            "**Common Fixes:**\n"
-            "1. In **Streamlit Cloud Settings**, go to **Secrets**.\n"
-            "2. Ensure `RPC_URL` includes the **full key** (e.g., `.../rpc?key=AIza...`).\n"
-            "3. If using Google Cloud, ensure the API Key has **Blockchain Node Engine API** enabled."
-        )
+        st.error("Blockchain connection failed. Check your RPC configuration.")
+        if st.button("Reconnect"):
+            st.cache_resource.clear()
+            st.rerun()
         _render_footer()
         st.stop()
 
@@ -631,7 +616,7 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # ── Duplicate Checks ──────────────────────────────────────────────────────
+    # ── Duplicate Check ───────────────────────────────────────────────────────
     try:
         hash_bytes = bytes16_from_hex(md5_hash)
         onchain_exists = _retry_call(
@@ -669,7 +654,7 @@ def main():
                 lambda: contract.functions.getRecord(hash_bytes).call()
             )
             ts = (
-                datetime.fromtimestamp(record[3], tz=__import__('datetime').timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+                datetime.fromtimestamp(record[3], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
                 if record[3] else "—"
             )
             rows = [
@@ -718,7 +703,7 @@ def main():
 
     if st.button("Register on Blockchain", use_container_width=True):
         if not account:
-            st.error("Signer key not configured. Set DEPLOYER_PRIVATE_KEY in .env file.")
+            st.error("Signer key not configured. Set DEPLOYER_PRIVATE_KEY.")
             _render_footer()
             return
 
@@ -799,5 +784,7 @@ def _render_footer():
         """,
         unsafe_allow_html=True,
     )
+
+
 if __name__ == "__main__":
     main()
