@@ -412,10 +412,10 @@ PAGE_CSS = """
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
-@st.cache_resource
 def _get_web3() -> Web3:
     rpc = _env("RPC_URL", "http://127.0.0.1:8545")
-    return Web3(Web3.HTTPProvider(rpc))
+    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={'timeout': 20}))
+    return w3
 
 
 @st.cache_resource
@@ -526,8 +526,19 @@ def main():
     )
 
     if not is_online:
+        rpc_attempted = _env("RPC_URL", "http://127.0.0.1:8545")
+        # Mask the key for security
+        masked_rpc = rpc_attempted.split('?')[0] if '?' in rpc_attempted else rpc_attempted
+        
         st.error(
-            "Blockchain not reachable. Ensure Ganache is running and the contract is deployed."
+            f"**Blockchain connection failed.**"
+        )
+        st.info(
+            f"**Attempted RPC:** `{masked_rpc}`\n\n"
+            "**Common Fixes:**\n"
+            "1. If live: Ensure keys are in **Streamlit Cloud > Settings > Secrets**.\n"
+            "2. If local: Ensure **Ganache** is running.\n"
+            "3. Check if your Google Cloud RPC key has expired or is restricted."
         )
         _render_footer()
         st.stop()
@@ -774,7 +785,5 @@ def _render_footer():
         """,
         unsafe_allow_html=True,
     )
-
-
 if __name__ == "__main__":
     main()
