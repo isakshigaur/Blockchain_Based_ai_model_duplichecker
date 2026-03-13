@@ -414,7 +414,9 @@ PAGE_CSS = """
 
 def _get_web3() -> Web3:
     rpc = _env("RPC_URL", "http://127.0.0.1:8545")
-    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={'timeout': 20}))
+    # Google Cloud RPC sometimes requires specific headers or timeouts
+    headers = {'User-Agent': 'Mozilla/5.0 (StreamlitCloud)'}
+    w3 = Web3(Web3.HTTPProvider(rpc, request_kwargs={'timeout': 20, 'headers': headers}))
     return w3
 
 
