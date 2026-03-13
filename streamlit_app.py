@@ -15,6 +15,15 @@ from backend.model_checker import (
 )
 from backend.ipfs_cid import generate_ipfs_cid
 
+@st.cache_data
+def _compute_md5(payload: bytes) -> str:
+    return compute_md5_from_bytes(payload)
+
+
+@st.cache_data
+def _generate_cid(payload: bytes) -> str:
+    return generate_ipfs_cid(payload)
+
 load_dotenv()
 
 ARTIFACT_PATH = Path("artifacts/ModelRegistry.json")
@@ -403,11 +412,13 @@ PAGE_CSS = """
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+@st.cache_resource
 def _get_web3() -> Web3:
     rpc = _env("RPC_URL", "http://127.0.0.1:8545")
     return Web3(Web3.HTTPProvider(rpc))
 
 
+@st.cache_resource
 def _load_artifact() -> Optional[dict]:
     if not ARTIFACT_PATH.exists():
         return None
@@ -420,7 +431,8 @@ def _read_deployment_address() -> Optional[str]:
     return json.loads(DEPLOYMENT_PATH.read_text()).get("contractAddress")
 
 
-def _load_contract(w3: Web3):
+@st.cache_resource
+def _load_contract(_w3: Web3):
     address = _env("CONTRACT_ADDRESS") or _read_deployment_address()
     if not address:
         return None
@@ -574,8 +586,8 @@ def main():
     )
 
     # ── Compute Hashes ────────────────────────────────────────────────────────
-    md5_hash = compute_md5_from_bytes(payload)
-    ipfs_cid = generate_ipfs_cid(payload)
+    md5_hash = _compute_md5(payload)
+    ipfs_cid = _generate_cid(payload)
 
     st.markdown(
         f"""
